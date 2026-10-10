@@ -108,52 +108,81 @@ function blobHeaders(extra) {
   return Object.assign({ Authorization: "Bearer " + BLOB_TOKEN }, extra || {});
 }
 
+/* Transient Blob failures (429 / 5xx / network) are retried with a short
+   backoff — every storage operation below is idempotent (list, read,
+   full-payload PUT, delete), so retrying cannot corrupt anything. */
+const RETRY_DELAYS = [300, 900];
+function blobError(kind, status) {
+  const e = new Error("blob " + kind + " " + status);
+  if (status != null) e.status = status;
+  return e;
+}
+function retryable(err) {
+  const s = err && err.status;
+  return s == null || s === 429 || s >= 500;
+}
+async function withRetry(fn) {
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e) {
+      if (i >= RETRY_DELAYS.length || !retryable(e)) throw e;
+      await new Promise(function (r) { setTimeout(r, RETRY_DELAYS[i]); });
+    }
+  }
+}
+
 async function storeGet() {
   if (!BLOB_TOKEN) return localGet();
-  const list = await fetch(BLOB_BASE + "/?pathname=" + encodeURIComponent(DATA_PATHNAME), {
-    headers: blobHeaders()
+  return withRetry(async function () {
+    const list = await fetch(BLOB_BASE + "/?pathname=" + encodeURIComponent(DATA_PATHNAME), {
+      headers: blobHeaders()
+    });
+    if (!list.ok) throw blobError("list", list.status);
+    const body = await list.json();
+    const blobs = (body && body.blobs) || [];
+    if (!blobs.length) return null;
+    const file = await fetch(blobs[0].url);
+    if (!file.ok) throw blobError("read", file.status);
+    return await file.json();
   });
-  if (!list.ok) throw new Error("blob list " + list.status);
-  const body = await list.json();
-  const blobs = (body && body.blobs) || [];
-  if (!blobs.length) return null;
-  const file = await fetch(blobs[0].url);
-  if (!file.ok) throw new Error("blob read " + file.status);
-  return await file.json();
 }
 
 async function storePut(data) {
   if (!BLOB_TOKEN) return localPut(data);
-  const r = await fetch(BLOB_BASE + "/" + DATA_PATHNAME, {
-    method: "PUT",
-    headers: blobHeaders({
-      "content-type": "application/json",
-      "x-add-random-suffix": "0",
-      "x-cache-control-max-age": "0"
-    }),
-    body: JSON.stringify(data)
+  return withRetry(async function () {
+    const r = await fetch(BLOB_BASE + "/" + DATA_PATHNAME, {
+      method: "PUT",
+      headers: blobHeaders({
+        "content-type": "application/json",
+        "x-add-random-suffix": "0",
+        "x-cache-control-max-age": "0"
+      }),
+      body: JSON.stringify(data)
+    });
+    if (!r.ok) throw blobError("write", r.status);
+    return true;
   });
-  if (!r.ok) throw new Error("blob write " + r.status);
-  return true;
 }
 
 async function storeClear() {
   if (!BLOB_TOKEN) return localClear();
-  const list = await fetch(BLOB_BASE + "/?pathname=" + encodeURIComponent(DATA_PATHNAME), {
-    headers: blobHeaders()
+  return withRetry(async function () {
+    const list = await fetch(BLOB_BASE + "/?pathname=" + encodeURIComponent(DATA_PATHNAME), {
+      headers: blobHeaders()
+    });
+    if (!list.ok) throw blobError("list", list.status);
+    const body = await list.json();
+    const blobs = (body && body.blobs) || [];
+    if (!blobs.length) return true;
+    // deletion is POST /delete with the blob URLs (not HTTP DELETE)
+    const r = await fetch(BLOB_BASE + "/delete", {
+      method: "POST",
+      headers: blobHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ urls: blobs.map(function (b) { return b.url; }) })
+    });
+    if (!r.ok) throw blobError("delete", r.status);
+    return true;
   });
-  if (!list.ok) throw new Error("blob list " + list.status);
-  const body = await list.json();
-  const blobs = (body && body.blobs) || [];
-  if (!blobs.length) return true;
-  // deletion is POST /delete with the blob URLs (not HTTP DELETE)
-  const r = await fetch(BLOB_BASE + "/delete", {
-    method: "POST",
-    headers: blobHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ urls: blobs.map(function (b) { return b.url; }) })
-  });
-  if (!r.ok) throw new Error("blob delete " + r.status);
-  return true;
 }
 
 /* ---------- local (dev) fallback ---------- */
