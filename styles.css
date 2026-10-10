@@ -319,6 +319,12 @@ table.tgrid th, table.tgrid td { background: color-mix(in srgb, var(--bg2) 55%, 
 .cls .c-meta { display: flex; align-items: center; gap: 7px; margin-top: 4px; flex-wrap: wrap; }
 .cls .c-loc { font-size: 10.5px; font-weight: 700; color: var(--c); letter-spacing: 0.2px; }
 .cls .c-sess { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 0.2px; }
+.cls .c-time { font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* inline icons (sunrise / sunset / calendar) */
+svg.ic { width: 11px; height: 11px; vertical-align: -1.5px; margin-right: 4px; }
+.slot .kind svg.ic { width: 9px; height: 9px; vertical-align: -1px; margin-right: 3px; }
+.empty .big svg.ic { width: 34px; height: 34px; margin-right: 0; }
 .cls .c-live { margin-left: auto; font-size: 9.5px; font-weight: 800; color: var(--live); text-transform: uppercase; letter-spacing: 0.5px; }
 
 /* double lesson — one card merged across its rows */
@@ -421,7 +427,7 @@ footer a { color: var(--muted); }
   .info-right { width: 100%; justify-content: space-between; }
   .progs { max-height: 34vh; }
   .search { margin: 10px; }
-  html[data-theme="dark"], html[data-theme="light"] { --grid-row: 64px; }
+  html[data-theme="dark"], html[data-theme="light"] { --grid-row: 72px; }
   .tgrid th.slot, .tgrid th.corner { width: 76px; }
   .tgrid th.slot { padding: 6px 7px; }
   .slot .kind { display: none; }

@@ -86,6 +86,15 @@
   };
   var BUILDING = { N: "North", G: "Global" };
 
+  /* inline SVG icons — consistent across platforms (unlike emoji) */
+  var ICON_SUNRISE = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M7.5 17a4.5 4.5 0 0 1 9 0"/><path d="M12 3v4"/><path d="m9.8 5.2 2.2-2.2 2.2 2.2"/><path d="M5.2 9.5 7 11.3"/><path d="M18.8 9.5 17 11.3"/></svg>';
+  var ICON_SUNSET = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M7 20a5 5 0 0 1 10 0"/><path d="M12 2.5v5"/><path d="m9.8 5.8 2.2 2.2 2.2-2.2"/></svg>';
+  var ICON_CALENDAR = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M8 2.5v4M16 2.5v4M3 9.5h18"/></svg>';
+  function periodLabel(period) {
+    return (period === "morning" ? ICON_SUNRISE : ICON_SUNSET) +
+      (period === "morning" ? "Morning" : "Afternoon");
+  }
+
   /* ---- tiny helpers -------------------------------------- */
   var $ = function (id) { return document.getElementById(id); };
 
@@ -444,7 +453,7 @@
     v.textContent = "";
     var p = curProgs().filter(function (x) { return x.id === state.prog; })[0];
     if (!p) {
-      v.appendChild(el("div", "panel empty", '<div class="big">🗓️</div>No program available for this semester.'));
+      v.appendChild(el("div", "panel empty", '<div class="big">' + ICON_CALENDAR + '</div>No program available for this semester.'));
       return;
     }
     if (state.view === "list") renderList(v, p);
@@ -524,7 +533,8 @@
       cls.innerHTML =
         '<div class="c-name">' + esc(e.course) + tag + "</div>" +
         '<div class="c-meta"><span class="c-loc">' + esc(e.location) + "</span>" +
-        '<span class="c-sess" title="' + esc(timeText) + '">' + esc("Session " + e.session) + "</span>" +
+        '<span class="c-sess">' + esc("Session " + e.session) + "</span>" +
+        '<span class="c-time">' + esc(timeText) + "</span>" +
         (adminOn() ? '<button class="mini-edit" type="button" title="Edit program" data-edit-prog="' + esc(p.id) + '">✎</button>' : "") +
         "</div>";
       return cls;
@@ -538,7 +548,7 @@
 
       if (pr.type === "group") {
         row.className = "grp";
-        var label = (pr.period === "morning" ? "🌅 Morning" : "🌇 Afternoon");
+        var label = periodLabel(pr.period);
         var range = pr.from.time.split("-")[0] + "–" + pr.to.time.split("-").pop();
         var covered = days.some(function (d) { return coveredAt(d, pi); });
         var gh = document.createElement("th");
@@ -586,7 +596,7 @@
       th.className = "slot";
       th.innerHTML = '<span class="num">Session ' + esc(s.session) + "</span>" +
         '<span class="time">' + esc(s.time) + "</span>" +
-        '<span class="kind">' + (s.period === "morning" ? "🌅 Morning" : "🌇 Afternoon") + "</span>";
+        '<span class="kind">' + periodLabel(s.period) + "</span>";
       row.appendChild(th);
 
       days.forEach(function (d) {

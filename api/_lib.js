@@ -130,17 +130,34 @@ async function withRetry(fn) {
     }
   }
 }
+function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-async function storeGet() {
-  if (!BLOB_TOKEN) return localGet();
+async function listBlobs() {
   return withRetry(async function () {
     const list = await fetch(BLOB_BASE + "/?pathname=" + encodeURIComponent(DATA_PATHNAME), {
       headers: blobHeaders()
     });
     if (!list.ok) throw blobError("list", list.status);
     const body = await list.json();
-    const blobs = (body && body.blobs) || [];
-    if (!blobs.length) return null;
+    return (body && body.blobs) || [];
+  });
+}
+/* An empty list is confirmed by a second read after a short pause — the
+   list endpoint has been observed to return a transient empty result
+   while the blob exists (which would otherwise make Reset report success
+   without deleting anything). */
+async function listBlobsConfirmed() {
+  let blobs = await listBlobs();
+  if (blobs.length) return blobs;
+  await delay(300);
+  return listBlobs();
+}
+
+async function storeGet() {
+  if (!BLOB_TOKEN) return localGet();
+  const blobs = await listBlobsConfirmed();
+  if (!blobs.length) return null;
+  return withRetry(async function () {
     const file = await fetch(blobs[0].url);
     if (!file.ok) throw blobError("read", file.status);
     return await file.json();
@@ -166,23 +183,31 @@ async function storePut(data) {
 
 async function storeClear() {
   if (!BLOB_TOKEN) return localClear();
-  return withRetry(async function () {
-    const list = await fetch(BLOB_BASE + "/?pathname=" + encodeURIComponent(DATA_PATHNAME), {
-      headers: blobHeaders()
-    });
-    if (!list.ok) throw blobError("list", list.status);
-    const body = await list.json();
-    const blobs = (body && body.blobs) || [];
-    if (!blobs.length) return true;
+  let emptyStreak = 0;
+  for (let i = 0; i < 5; i++) {
+    const blobs = await listBlobs();
+    if (!blobs.length) {
+      // require two empty reads in a row before declaring success
+      emptyStreak++;
+      if (emptyStreak >= 2) return true;
+      await delay(300);
+      continue;
+    }
+    emptyStreak = 0;
     // deletion is POST /delete with the blob URLs (not HTTP DELETE)
-    const r = await fetch(BLOB_BASE + "/delete", {
-      method: "POST",
-      headers: blobHeaders({ "content-type": "application/json" }),
-      body: JSON.stringify({ urls: blobs.map(function (b) { return b.url; }) })
+    await withRetry(async function () {
+      const r = await fetch(BLOB_BASE + "/delete", {
+        method: "POST",
+        headers: blobHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ urls: blobs.map(function (b) { return b.url; }) })
+      });
+      if (!r.ok) throw blobError("delete", r.status);
     });
-    if (!r.ok) throw blobError("delete", r.status);
-    return true;
-  });
+  }
+  // verify: if anything is left after the loop, fail loudly
+  const rest = await listBlobs();
+  if (rest.length) throw blobError("delete-verify", 500);
+  return true;
 }
 
 /* ---------- local (dev) fallback ---------- */
