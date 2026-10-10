@@ -37,13 +37,23 @@
   }
 
   /* Pull the published timetable. Silently keeps current data when the
-     API is absent (file://, offline, plain static hosting). */
+     API is absent (file://, offline, plain static hosting). A failed
+     fetch is retried with backoff (2s → 30s) so a fresh visitor sees a
+     recent publish promptly even if the very first request hiccups. */
+  var syncFailures = 0, syncRetryTimer = null;
+  function scheduleSyncRetry() {
+    if (syncRetryTimer) return;
+    var delay = Math.min(2000 * Math.pow(2, Math.min(syncFailures, 4)), 30000);
+    syncFailures++;
+    syncRetryTimer = setTimeout(function () { syncRetryTimer = null; syncRemote(); }, delay);
+  }
   function syncRemote() {
     if (typeof fetch !== "function" || location.protocol === "file:") return Promise.resolve(false);
     return fetch(API_BASE + "timetable", { cache: "no-store" })
       .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
       .then(function (res) {
         if (!res || !res.ok) return false;
+        syncFailures = 0;
         if (!res.data) {
           // nothing published (e.g. admin reset) — revert to device/shipped data
           cacheDrop(REMOTE_KEY);
@@ -58,7 +68,7 @@
         renderAll();
         return true;
       })
-      .catch(function () { return false; });
+      .catch(function () { scheduleSyncRetry(); return false; });
   }
   function storeSave(d) {
     try { localStorage.setItem(DATA_KEY, JSON.stringify(d)); return true; }
