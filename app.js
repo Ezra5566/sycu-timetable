@@ -192,8 +192,7 @@
        Block 1  8:20–10:00   (break 9:05–9:15)
        Block 2  10:20–12:00  (break 11:05–11:15)
        Block 3  13:30–15:10  (break 14:15–14:25)
-       Block 4  15:20–17:00  (break 16:05–16:15)
-     A course can be one 50-minute period, or a double lesson covering
+       Block 4  15:20–17:00  (break 16:05–16:15)      A course can be one 45-minute period, or a double lesson covering
      both periods of a block (~100 min including the internal break). */
   function blockOfRange(r) {
     if (!r) return -1;

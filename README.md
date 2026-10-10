@@ -65,7 +65,7 @@ vercel dev
 
 ### The teaching day
 
-Four fixed blocks, two per half of the day — each block holds two 50-minute
+Four fixed blocks, two per half of the day — each block holds two 45-minute
 periods separated by a 10-minute break:
 
 | Block | Full range | Periods |
@@ -75,7 +75,7 @@ periods separated by a 10-minute break:
 | 3 · afternoon | 13:30–15:10 | 5: 13:30–14:15 · *break* · 6: 14:25–15:10 |
 | 4 · afternoon | 15:20–17:00 | 7: 15:20–16:05 · *break* · 8: 16:15–17:00 |
 
-A course takes either a single lesson (one 50-minute period) or a double
+A course takes either a single lesson (one 45-minute period) or a double
 lesson — both periods of one block, ~100 minutes including the internal
 break (sessions `5` + `6`, or the combined code `"5-6"`).
 
