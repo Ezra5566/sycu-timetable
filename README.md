@@ -43,9 +43,16 @@ vercel dev
 - **Program list** with search — filters by program name, Chinese name, course
   or room. Press Enter to jump to the first matching program.
 - **Two views** (remembered in `localStorage`):
-  - **Grid** — week × session timetable. Days with no classes are omitted;
-    empty slots stay blank.
-  - **List** — classes grouped by day, ordered by session.
+  - **Grid** — week × session timetable: 8 lesson rows for `standard8`
+    semesters, 4 for `block4`. The day is grouped under **Morning** and
+    **Afternoon** headers; the 10-minute breaks inside a block show as
+    faint dashed dividers (labelled *Break*), and the larger gaps show
+    their length (*Lunch* between the halves of the day). Double lessons
+    render as **one card spanning the full block** — never as two
+    separate entries. Days with no classes are omitted; empty slots stay
+    blank.
+  - **List** — classes grouped by day, ordered by session; a double lesson
+    appears as a single `5-6` entry with its combined time range.
 - **Live updates** — the published timetable is re-fetched when the tab gains
   focus and every minute while visible, so timetable changes appear on open
   screens (classrooms, kiosks, phones) within a minute — no refresh needed.
@@ -55,6 +62,22 @@ vercel dev
   the course name), consistent across legend, cards and list.
 - **Dark / light theme**, sticky header, mobile responsive layout, and
   **print-friendly CSS** (printing gives a clean white timetable).
+
+### The teaching day
+
+Four fixed blocks, two per half of the day — each block holds two 50-minute
+periods separated by a 10-minute break:
+
+| Block | Full range | Periods |
+| --- | --- | --- |
+| 1 · morning | 8:20–10:00 | 1: 8:20–9:05 · *break* · 2: 9:15–10:00 |
+| 2 · morning | 10:20–12:00 | 3: 10:20–11:05 · *break* · 4: 11:15–12:00 |
+| 3 · afternoon | 13:30–15:10 | 5: 13:30–14:15 · *break* · 6: 14:25–15:10 |
+| 4 · afternoon | 15:20–17:00 | 7: 15:20–16:05 · *break* · 8: 16:15–17:00 |
+
+A course takes either a single lesson (one 50-minute period) or a double
+lesson — both periods of one block, ~100 minutes including the internal
+break (sessions `5` + `6`, or the combined code `"5-6"`).
 
 ## For the administrator
 
@@ -88,10 +111,16 @@ Editing notes:
   **Export** remains the publishing path.
 - Rooms referenced by a class are created automatically if the code is new;
   renaming a room code in the *Rooms* tab updates every class that uses it.
-- Rows that clash with another class of the same program in the same day and
-  session are highlighted amber — allowed, but flagged.
+- Rows that clash with another class of the same program in an overlapping
+  session are highlighted amber — allowed, but flagged. A double lesson
+  entered as two rows (`5` + `6`) is **not** a clash.
 - The time-slot format decides the session rows: `standard8` = 8 single
-  sessions (e.g. `5`), `block4` = 4 double blocks (e.g. `"5-6"`).
+  sessions (e.g. `5`; double lessons `1-2` … `7-8` are selectable too),
+  `block4` = 4 double blocks (e.g. `"5-6"`).
+- **Double lessons** in `standard8` can be entered either way: pick
+  *Double lesson 5-6* from the session list, or list the same course twice
+  (session `5` and session `6`) — both render as one continuous block
+  covering the full 13:30–15:10 range.
 
 ## How data flows
 
@@ -141,7 +170,8 @@ offline). Keep the same shape:
   `timeSlotFormat`.
 - `semesters[].programs[].schedule[]` — `{ day, session, course, location }`.
   `session` matches a slot's `session` value (`5` for standard8, `"5-6"` for
-  block4).
+  block4). In `standard8`, the same course on both sessions of a block
+  (e.g. `5` and `6` on the same day) is treated as one double lesson.
 - `locations` — room metadata (`building`, `room`, `campus`).
 
 An exported `timetable.js` is already in the right shape — edit it, or import

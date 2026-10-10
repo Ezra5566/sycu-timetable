@@ -97,6 +97,10 @@
     var hh = h % 12 === 0 ? 12 : h % 12;
     return hh + ":" + pad(m) + " " + ap;
   }
+  function fmtMin(min) {
+    var h = Math.floor(min / 60) % 24, m = min % 60;
+    return h + ":" + pad(m);
+  }
   /* course accent colours — keyed by stable course string */
   var PALETTE = ["#6aa8ff", "#2ec7a5", "#b18cff", "#f5b45a", "#5ad1e8", "#ff8f6b", "#7ddc7d", "#f58fbf"];
   function hash(s) {
@@ -121,13 +125,140 @@
     var parts = s.time.split("-");
     return { start: toMin(parts[0]), end: toMin(parts[1]) };
   }
-  function slotFor(sem, session) {
+  /* Sessions can be single ("5") or a double lesson ("5-6").
+     Everything below matches by session RANGE, so a double lesson
+     works in any time-slot format and merges across its rows. */
+  function parseSession(v) {
+    var m = String(v).match(/^\s*(\d+)\s*-\s*(\d+)\s*$/);
+    if (m) return { from: +m[1], to: +m[2] };
+    var n = parseInt(v, 10);
+    return isNaN(n) ? null : { from: n, to: n };
+  }
+  function sessionsOverlap(a, b) {
+    var ra = parseSession(a), rb = parseSession(b);
+    return !!(ra && rb && ra.from <= rb.to && rb.from <= ra.to);
+  }
+  function fmtSlots(sem) {
     var fmt = DATA.timeSlotFormats[sem.timeSlotFormat];
-    if (!fmt || !fmt.slots) return null;
-    for (var i = 0; i < fmt.slots.length; i++) {
-      if (String(fmt.slots[i].session) === String(session)) return fmt.slots[i];
+    return (fmt && fmt.slots) ? fmt.slots : [];
+  }
+  function slotFor(sem, session) {
+    var slots = fmtSlots(sem), i;
+    for (i = 0; i < slots.length; i++) {
+      if (String(slots[i].session) === String(session)) return slots[i];
+    }
+    for (i = 0; i < slots.length; i++) {
+      if (sessionsOverlap(slots[i].session, session)) return slots[i];
     }
     return null;
+  }
+  /* Union of clock time covered by a session — a double lesson spans
+     both of its slots (e.g. 1-2 → 8:20-10:00). */
+  function timeSpanOf(sem, session) {
+    var slots = fmtSlots(sem), start = null, end = null;
+    for (var i = 0; i < slots.length; i++) {
+      if (!sessionsOverlap(slots[i].session, session)) continue;
+      var t = timeOfSlot(slots[i]);
+      if (!t) continue;
+      if (start === null || t.start < start) start = t.start;
+      if (end === null || t.end > end) end = t.end;
+    }
+    return start === null ? null : { start: start, end: end };
+  }
+  /* Which grid rows an entry occupies: first slot index + row count. */
+  function entrySpan(sem, session) {
+    var slots = fmtSlots(sem), start = -1, span = 0;
+    for (var i = 0; i < slots.length; i++) {
+      if (sessionsOverlap(slots[i].session, session)) {
+        if (start < 0) start = i;
+        span++;
+      } else if (start >= 0) break;
+    }
+    return start < 0 ? null : { start: start, span: span };
+  }
+
+  /* ---- day structure: blocks, breaks, double lessons ----
+     The day is four teaching blocks of two periods each:
+       Block 1  8:20–10:00   (break 9:05–9:15)
+       Block 2  10:20–12:00  (break 11:05–11:15)
+       Block 3  13:30–15:10  (break 14:15–14:25)
+       Block 4  15:20–17:00  (break 16:05–16:15)
+     A course can be one 50-minute period, or a double lesson covering
+     both periods of a block (~100 min including the internal break). */
+  function blockOfRange(r) {
+    if (!r) return -1;
+    var k = Math.floor((r.from - 1) / 2);
+    return r.to > 2 * k + 2 ? -1 : k; // -1 = crosses a block boundary
+  }
+  /* two single sessions forming one block: odd → odd+1 (1|2, 3|4 …) */
+  function sameBlock(a, b) {
+    var ra = parseSession(a), rb = parseSession(b);
+    return !!(ra && rb && ra.from === ra.to && rb.from === rb.to &&
+      ra.from % 2 === 1 && rb.from === ra.from + 1);
+  }
+  /* gap between two consecutive slots, or null when they touch */
+  function gapBetween(prev, next) {
+    var a = timeOfSlot(prev), b = timeOfSlot(next);
+    if (!a || !b || b.start <= a.end) return null;
+    var mins = b.start - a.end;
+    var internal = sameBlock(prev.session, next.session);
+    return {
+      time: fmtMin(a.end) + "–" + fmtMin(b.start),
+      internal: internal,
+      mins: mins,
+      label: internal ? "Break" : (mins >= 60 ? "Lunch" : mins + " min break")
+    };
+  }
+  /* A double lesson entered as two rows — the odd and even session of the
+     same block, same course + day — becomes ONE entry covering the whole
+     block. Combined codes ("5-6") already are a single entry. */
+  function mergedSchedule(sem, program) {
+    var groups = {};
+    (program.schedule || []).forEach(function (e) {
+      var key = e.day + "\u0001" + e.course;
+      (groups[key] = groups[key] || []).push(e);
+    });
+    var out = [];
+    Object.keys(groups).forEach(function (key) {
+      var list = groups[key];
+      if (list.length === 1) { out.push(list[0]); return; }
+      var sorted = list.slice().sort(function (a, b) {
+        var ra = parseSession(a.session), rb = parseSession(b.session);
+        return (ra ? ra.from : 99) - (rb ? rb.from : 99);
+      });
+      var clusters = [];
+      sorted.forEach(function (e) {
+        var r = parseSession(e.session);
+        if (!r) { out.push(e); return; }
+        var k = blockOfRange(r), c = null;
+        for (var ci = 0; ci < clusters.length; ci++) {
+          var cc = clusters[ci];
+          if (k >= 0 && cc.k === k && r.from <= cc.to + 1 && cc.from <= r.to + 1) { c = cc; break; }
+        }
+        if (c) {
+          c.entries.push(e);
+          if (r.from < c.from) c.from = r.from;
+          if (r.to > c.to) c.to = r.to;
+        } else {
+          clusters.push({ k: k, from: r.from, to: r.to, entries: [e] });
+        }
+      });
+      clusters.forEach(function (c) {
+        if (c.entries.length === 1) { out.push(c.entries[0]); return; }
+        var rooms = [];
+        c.entries.forEach(function (e) {
+          if (e.location && rooms.indexOf(e.location) < 0) rooms.push(e.location);
+        });
+        out.push({
+          day: c.entries[0].day,
+          session: c.from === c.to ? String(c.from) : c.from + "-" + c.to,
+          course: c.entries[0].course,
+          location: rooms.join(" · "),
+          merged: true
+        });
+      });
+    });
+    return out;
   }
   function dayIndex(day) { return DAYS.indexOf(day); }
   function dayKey(d) { return DAYS.indexOf(d); }
@@ -140,9 +271,8 @@
     var nowDay = now.getDay(); // 0 Sun..6 Sat
     var nowIdx = nowDay === 0 ? 6 : nowDay - 1; // Mon=0
 
-    var events = (program.schedule || []).map(function (e) {
-      var s = slotFor(currentSem, e.session);
-      var t = timeOfSlot(s);
+    var events = mergedSchedule(currentSem, program).map(function (e) {
+      var t = timeSpanOf(currentSem, e.session);
       return t ? { e: e, start: t.start, end: t.end, di: dayIndex(e.day) } : null;
     }).filter(Boolean).sort(function (a, b) { return a.di * 1440 + a.start - (b.di * 1440 + b.start); });
 
@@ -231,12 +361,12 @@
       var b = el("button", "program" + (p.id === state.prog ? " on" : ""));
       b.type = "button";
       var c = colorFor((p.schedule && p.schedule[0] && p.schedule[0].course) || p.name);
-      var kindLabel = p.timeSlotFormat === "block4" ? "4 blocks" : "8 sessions";
+      var kindLabel = curSem().timeSlotFormat === "block4" ? "4 blocks" : "8 sessions";
       b.innerHTML =
         '<div class="p-top"><span class="dot" style="background:' + c + '"></span>' +
         '<span class="p-name">' + esc(p.name) + "</span></div>" +
         '<div class="p-cn">' + esc(p.nameCN || "") + "</div>" +
-        '<div class="p-meta"><span class="pill">' + (p.schedule || []).length + " slots</span>" +
+        '<div class="p-meta"><span class="pill">' + mergedSchedule(curSem(), p).length + " slots</span>" +
         '<span class="pill ghost">' + esc(kindLabel) + "</span></div>";
       b.onclick = function () { state.prog = p.id; renderPrograms(); renderInfo(); renderView(); };
       box.appendChild(b);
@@ -260,7 +390,7 @@
     if (p) {
       right.appendChild(el("span", "badge",
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M8 2.5v4M16 2.5v4M3 9.5h18"/></svg>' +
-        esc(p.nameCN || "") + "  ·  " + (p.schedule || []).length + " slots"));
+        esc(p.nameCN || "") + "  ·  " + mergedSchedule(sem, p).length + " slots"));
     }
 
     var sw = el("div", "switch");
@@ -318,14 +448,15 @@
     var fmt = DATA.timeSlotFormats[sem.timeSlotFormat];
     var slots = fmt ? fmt.slots : [];
     var st = STATUS[p.id] || statusFor(p);
+    var sched = mergedSchedule(sem, p);
     var semDaySet = {};
-    (p.schedule || []).forEach(function (e) { semDaySet[e.day] = 1; });
+    sched.forEach(function (e) { semDaySet[e.day] = 1; });
     var days = DAYS.filter(function (d) { return semDaySet[d]; });
     if (!days.length) days = DAYS.slice(0, 5);
 
     var scroll = el("div", "grid-scroll");
     var t = document.createElement("table");
-    t.className = "tgrid";
+    t.className = "tgrid" + (sem.timeSlotFormat === "block4" ? " has-blocks" : "");
 
     // header row
     var tr = document.createElement("tr");
@@ -340,9 +471,108 @@
     });
     t.appendChild(tr);
 
-    // slot rows
-    slots.forEach(function (s) {
+    /* Row plan: Morning/Afternoon section headers, lesson rows, and the
+       breaks between them (10-minute internal breaks as faint dividers,
+       larger gaps labelled — lunch between the halves of the day). */
+    var plan = [];
+    var lastPeriod = null;
+    slots.forEach(function (s, idx) {
+      if (idx > 0) {
+        var g = gapBetween(slots[idx - 1], s);
+        if (g) plan.push({ type: "gap", gap: g });
+      }
+      if (s.period !== lastPeriod) {
+        var end = s;
+        for (var j = idx; j < slots.length && slots[j].period === s.period; j++) end = slots[j];
+        plan.push({ type: "group", period: s.period, from: s, to: end });
+        lastPeriod = s.period;
+      }
+      plan.push({ type: "lesson", slot: s, lesson: idx });
+    });
+    var lessonPhys = {};
+    plan.forEach(function (pr, pi) { if (pr.type === "lesson") lessonPhys[pr.lesson] = pi; });
+
+    // render the plan: section headers, breaks, and lesson rows. A double
+    // lesson is one card merged (rowspan) across every physical row it
+    // covers — including the break inside it — labelled by session.
+    var placed = {};
+    var colCell = {}; /* day → active merged cell { stack, until } (physical row) */
+    var keyOf = function (e) { return e.day + "|" + e.session + "|" + e.course; };
+    var entriesStarting = function (d, lessonIdx) {
+      return sched.filter(function (e) {
+        if (e.day !== d || placed[keyOf(e)]) return false;
+        var sp = entrySpan(sem, e.session);
+        return !!sp && sp.start === lessonIdx;
+      });
+    };
+    var cardFor = function (e) {
+      var id = keyOf(e);
+      var cls = el("div", "cls" + (id === st.live ? " live" : id === st.next ? " next" : ""));
+      cls.style.setProperty("--c", colorFor(e.course));
+      var tag = id === st.live ? '<span class="c-live">● Now</span>' : id === st.next ? '<span class="c-live" style="color:var(--accent)">↑ Next</span>' : "";
+      var tspan = timeSpanOf(sem, e.session);
+      var timeText = tspan ? fmtMin(tspan.start) + "-" + fmtMin(tspan.end) : "";
+      cls.innerHTML =
+        '<div class="c-name">' + esc(e.course) + tag + "</div>" +
+        '<div class="c-meta"><span class="c-loc">' + esc(e.location) + "</span>" +
+        '<span class="c-sess" title="' + esc(timeText) + '">' + esc("Session " + e.session) + "</span>" +
+        (adminOn() ? '<button class="mini-edit" type="button" title="Edit program" data-edit-prog="' + esc(p.id) + '">✎</button>' : "") +
+        "</div>";
+      return cls;
+    };
+    var coveredAt = function (d, pi) {
+      return colCell[d] && colCell[d].until >= pi;
+    };
+
+    plan.forEach(function (pr, pi) {
       var row = document.createElement("tr");
+
+      if (pr.type === "group") {
+        row.className = "grp";
+        var label = (pr.period === "morning" ? "🌅 Morning" : "🌇 Afternoon");
+        var range = pr.from.time.split("-")[0] + "–" + pr.to.time.split("-").pop();
+        var covered = days.some(function (d) { return coveredAt(d, pi); });
+        var gh = document.createElement("th");
+        gh.className = "grp-head";
+        if (!covered) {
+          gh.colSpan = 1 + days.length;
+          gh.innerHTML = esc(label) + '<span class="grp-time">' + esc(range) + "</span>";
+          row.appendChild(gh);
+        } else {
+          // a double lesson crosses this row — keep its column clear
+          gh.innerHTML = esc(label);
+          row.appendChild(gh);
+          days.forEach(function (d) {
+            if (coveredAt(d, pi)) return;
+            var td = document.createElement("td");
+            td.className = "grp-cell";
+            row.appendChild(td);
+          });
+        }
+        t.appendChild(row);
+        return;
+      }
+
+      if (pr.type === "gap") {
+        row.className = "brk" + (pr.gap.internal ? " internal" : "");
+        var bh = document.createElement("th");
+        bh.className = "slot brk-head";
+        bh.innerHTML = '<span class="num">' + esc(pr.gap.label) + "</span>" +
+          '<span class="time">' + esc(pr.gap.time) + "</span>";
+        row.appendChild(bh);
+        days.forEach(function (d) {
+          if (coveredAt(d, pi)) return;
+          var td = document.createElement("td");
+          td.className = "brk-cell";
+          row.appendChild(td);
+        });
+        t.appendChild(row);
+        return;
+      }
+
+      /* lesson row */
+      row.className = "lesson";
+      var s = pr.slot;
       var th = document.createElement("th");
       th.className = "slot";
       th.innerHTML = '<span class="num">Session ' + esc(s.session) + "</span>" +
@@ -350,30 +580,35 @@
         '<span class="kind">' + (s.period === "morning" ? "🌅 Morning" : "🌇 Afternoon") + "</span>";
       row.appendChild(th);
 
-      var gapCount = 0;
       days.forEach(function (d) {
+        if (coveredAt(d, pi)) {
+          // column belongs to a merged double lesson above — join it
+          entriesStarting(d, pr.lesson).forEach(function (e) {
+            placed[keyOf(e)] = 1;
+            colCell[d].stack.appendChild(cardFor(e));
+          });
+          return;
+        }
+        var here = entriesStarting(d, pr.lesson);
         var cell = document.createElement("td");
         cell.className = "cell";
-        var here = (p.schedule || []).filter(function (e) { return e.day === d && String(e.session) === String(s.session); });
-        if (!here.length) { cell.classList.add("gap"); }
-        else {
-          var stack = el("div", "stack");
-          here.forEach(function (e) {
-            var id = e.day + "|" + e.session + "|" + e.course;
-            var cls = el("div", "cls" + (id === st.live ? " live" : id === st.next ? " next" : ""));
-            cls.style.setProperty("--c", colorFor(e.course));
-            var tag = id === st.live ? '<span class="c-live">● Now</span>' : id === st.next ? '<span class="c-live" style="color:var(--accent)">↑ Next</span>' : "";
-            cls.innerHTML =
-              '<div class="c-name">' + esc(e.course) + tag + "</div>" +
-              '<div class="c-meta"><span class="c-loc">' + esc(e.location) + "</span>" +
-              '<span class="c-time">' + esc(s ? s.time : "") + "</span>" +
-              (adminOn() ? '<button class="mini-edit" type="button" title="Edit program" data-edit-prog="' + esc(p.id) + '">✎</button>' : "") +
-              "</div>";
-            stack.appendChild(cls);
-          });
-          cell.appendChild(stack);
+        if (!here.length) { cell.classList.add("gap"); row.appendChild(cell); return; }
+
+        var stack = el("div", "stack");
+        var span = 1;
+        here.forEach(function (e) {
+          placed[keyOf(e)] = 1;
+          var sp = entrySpan(sem, e.session);
+          if (sp && sp.span > span) span = sp.span;
+          stack.appendChild(cardFor(e));
+        });
+        if (span > 1) {
+          var physEnd = lessonPhys[Math.min(pr.lesson + span - 1, slots.length - 1)];
+          cell.rowSpan = physEnd - pi + 1;
+          cell.classList.add("merge");
+          colCell[d] = { stack: stack, until: physEnd };
         }
-        if (cell.classList.contains("gap")) gapCount++;
+        cell.appendChild(stack);
         row.appendChild(cell);
       });
       t.appendChild(row);
@@ -396,7 +631,7 @@
   function renderList(v, p) {
     var wrap = el("div", "panel listwrap");
     var byDay = {};
-    (p.schedule || []).forEach(function (e) {
+    mergedSchedule(curSem(), p).forEach(function (e) {
       (byDay[e.day] = byDay[e.day] || []).push(e);
     });
     var st = STATUS[p.id] || statusFor(p);
@@ -415,14 +650,15 @@
         '<span class="n">' + list.length + " class" + (list.length > 1 ? "es" : "") + "</span>"));
       var en = el("div", "entries");
       list.forEach(function (e) {
-        var s = slotFor(curSem(), e.session);
+        var tspan = timeSpanOf(curSem(), e.session);
+        var timeText = tspan ? fmtMin(tspan.start) + "-" + fmtMin(tspan.end) : "";
         var id = e.day + "|" + e.session + "|" + e.course;
         var tag = id === st.live ? '<span class="tag live">Now</span>' : id === st.next ? '<span class="tag next">Next</span>' : "";
         var c = colorFor(e.course);
         var item = el("div", "entry");
         item.style.setProperty("--c", c);
         item.innerHTML =
-          '<div class="e-when">' + esc(e.session) + '<span class="s">' + (s ? esc(s.time) : "") + "</span></div>" +
+          '<div class="e-when">' + esc(e.session) + '<span class="s">' + esc(timeText) + "</span></div>" +
           '<div class="e-name">' + esc(e.course) + tag + "</div>" +
           '<div class="e-right"><span class="e-room">' + esc(e.location) + "</span>" +
           (adminOn() ? '<button class="mini-edit" type="button" title="Edit program" data-edit-prog="' + esc(p.id) + '">✎</button>' : "") +
@@ -443,10 +679,10 @@
   }
 
   function slotPos(p, session) {
-    var s = slotFor(curSem(), session);
-    if (!s) return 99;
-    for (var i = 0; i < DATA.timeSlotFormats[curSem().timeSlotFormat].slots.length; i++)
-      if (String(DATA.timeSlotFormats[curSem().timeSlotFormat].slots[i].session) === String(session)) return i;
+    var slots = fmtSlots(curSem());
+    for (var i = 0; i < slots.length; i++) {
+      if (sessionsOverlap(slots[i].session, session)) return i;
+    }
     return 99;
   }
 
@@ -470,7 +706,7 @@
   }
   function findEvent(p, id) {
     var key = id.split("|");
-    return (p.schedule || []).filter(function (e) {
+    return mergedSchedule(currentSem, p).filter(function (e) {
       return e.day === key[0] && String(e.session) === key[1] && e.course === key[2];
     })[0];
   }
@@ -570,7 +806,10 @@
     colorFor: colorFor,
     esc: esc,
     DAYS: DAYS,
-    DAY_CN: DAY_CN
+    DAY_CN: DAY_CN,
+    sessionsOverlap: sessionsOverlap,
+    entrySpan: entrySpan,
+    timeSpanOf: timeSpanOf
   };
 
   renderAll();

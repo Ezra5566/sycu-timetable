@@ -268,6 +268,40 @@
     var fmt = mgr.draft.timeSlotFormats[sem.timeSlotFormat];
     return fmt ? fmt.slots : [];
   }
+  /* Selectable sessions for a semester: every slot of its format, plus
+     paired double lessons (1-2, 3-4, 5-6, 7-8) for single-session formats
+     so the teacher can mark a two-period lesson directly. */
+  function sessionOptions(d, sem) {
+    var fmt = d.timeSlotFormats[sem.timeSlotFormat];
+    var slots = (fmt && fmt.slots) || [];
+    var opts = slots.map(function (sl) {
+      return { value: String(sl.session), time: String(sl.time), dbl: false };
+    });
+    if (sem.timeSlotFormat !== "block4" && slots.length > 1) {
+      for (var i = 0; i + 1 < slots.length; i += 2) {
+        var a = slots[i], b = slots[i + 1];
+        var start = String(a.time).split("-")[0];
+        var end = String(b.time).split("-").pop();
+        opts.push({ value: String(a.session) + "-" + String(b.session), time: start + "-" + end, dbl: true });
+      }
+    }
+    return opts;
+  }
+  /* <option> markup for a schedule row's session select, with the current
+     value selected (unknown/imported values keep a custom option). */
+  function sessionOptHtml(opts, cur) {
+    var c = String(cur);
+    var known = opts.some(function (o) { return o.value === c; });
+    var tag = function (o) {
+      return '<option value="' + esc(o.value) + '"' + (o.value === c ? " selected" : "") +
+        ">Session " + esc(o.value) + " · " + esc(o.time) + "</option>";
+    };
+    var html = known ? "" : '<option value="' + esc(c) + '" selected>Session ' + esc(c) + "</option>";
+    html += opts.filter(function (o) { return !o.dbl; }).map(tag).join("");
+    var dbls = opts.filter(function (o) { return o.dbl; }).map(tag).join("");
+    if (dbls) html += '<optgroup label="Double lessons">' + dbls + "</optgroup>";
+    return html;
+  }
 
   function openManager(progId) {
     if (!isActive()) { openLogin(); return; }
@@ -322,7 +356,8 @@
   function renderSemestersTab(body) {
     body.appendChild(el("p", "mgr-hint",
       "Semesters appear as tabs on the site. The time slot format sets the session rows — " +
-      "<b>standard8</b> = 8 single sessions, <b>block4</b> = 4 double blocks."));
+      "<b>standard8</b> = 8 single sessions (double lessons 1-2 … 7-8 selectable per class), " +
+      "<b>block4</b> = 4 double blocks."));
     var formats = Object.keys(mgr.draft.timeSlotFormats || {});
     mgr.draft.semesters.forEach(function (s, i) {
       var row = el("div", "mgr-row row-sem");
@@ -393,6 +428,7 @@
     body.appendChild(head);
 
     var slots = slotsOf(sem);
+    var opts = sessionOptions(mgr.draft, sem);
     var list = el("div", "mgr-list");
     list.appendChild(el("div", "mgr-subhead",
       "<b>Schedule</b> · " + (prog.schedule || []).length + " classes · " + esc(sem.timeSlotFormat)));
@@ -413,9 +449,7 @@
         '<select data-field="ent-day" data-i="' + i + '">' + window.SYCU_APP.DAYS.map(function (day) {
           return "<option" + (e.day === day ? " selected" : "") + ">" + day + "</option>";
         }).join("") + "</select>" +
-        '<select data-field="ent-session" data-i="' + i + '">' + slots.map(function (sl) {
-          return '<option value="' + esc(String(sl.session)) + '"' + (String(e.session) === String(sl.session) ? " selected" : "") + ">Session " + esc(String(sl.session)) + " · " + esc(sl.time) + "</option>";
-        }).join("") + "</select>" +
+        '<select data-field="ent-session" data-i="' + i + '">' + sessionOptHtml(opts, e.session) + "</select>" +
         '<input data-field="ent-course" data-i="' + i + '" value="' + esc(e.course || "") + '" placeholder="Course name" />' +
         '<input data-field="ent-loc" data-i="' + i + '" value="' + esc(e.location || "") + '" placeholder="Room" list="roomlist" />' +
         '<button class="btn-icon danger" type="button" data-act="ent-del" data-i="' + i + '" title="Remove class">✕</button>';
@@ -423,13 +457,13 @@
     });
     body.appendChild(list);
     body.appendChild(addBtn("ent-add", "+ Add class"));
-    body.appendChild(el("p", "mgr-hint", "Amber rows clash with another class of this program in the same time slot. Unknown room codes are added automatically on save."));
+    body.appendChild(el("p", "mgr-hint", "Amber rows clash with another class of this program in an overlapping session — double lessons count as both of their sessions. The same course listed in both sessions of a block (e.g. 5 and 6), or a <b>Double lesson</b> from the session list, renders as one continuous block. Unknown room codes are added automatically on save."));
   }
 
   function conflictOf(prog, idx) {
     var e = prog.schedule[idx];
     return (prog.schedule || []).some(function (x, i) {
-      return i !== idx && x.day === e.day && String(x.session) === String(e.session);
+      return i !== idx && x.day === e.day && window.SYCU_APP.sessionsOverlap(x.session, e.session);
     });
   }
 
@@ -508,8 +542,8 @@
     updateDirty();
   }
   function coerceSession(sem, val) {
-    var slots = slotsOf(sem);
-    for (var k = 0; k < slots.length; k++) if (String(slots[k].session) === val) return slots[k].session;
+    var opts = sessionOptions(mgr.draft, sem);
+    for (var k = 0; k < opts.length; k++) if (opts[k].value === String(val)) return opts[k].value;
     return val;
   }
   function renameRoom(oldKey, newKey) {
@@ -613,6 +647,7 @@
       s.nameCN = (s.nameCN || "").trim();
       if (!d.timeSlotFormats[s.timeSlotFormat]) s.timeSlotFormat = Object.keys(d.timeSlotFormats)[0];
       var slots = d.timeSlotFormats[s.timeSlotFormat].slots;
+      var opts = sessionOptions(d, s);
       (s.programs || []).forEach(function (p) {
         p.name = (p.name || "").trim();
         p.nameCN = (p.nameCN || "").trim();
@@ -623,7 +658,7 @@
           e.course = e.course.trim();
           e.location = (e.location || "").trim().toUpperCase();
           if (window.SYCU_APP.DAYS.indexOf(e.day) < 0) { e.day = "Monday"; fixes++; }
-          var known = slots.some(function (sl) { return String(sl.session) === String(e.session); });
+          var known = opts.some(function (o) { return o.value === String(e.session); });
           if (!known && slots.length) { e.session = slots[0].session; fixes++; }
           if (e.location && !d.locations[e.location]) {
             var m = e.location.match(/^([A-Za-z]+)[- ]?(\d.*)$/);
