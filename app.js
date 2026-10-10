@@ -811,6 +811,13 @@
     storeSave: storeSave,
     storeClear: storeClear,
     isCustomized: isCustomized,
+    resetToBundled: function () {
+      cacheDrop(DATA_KEY);
+      cacheDrop(REMOTE_KEY);
+      DATA = deepClone(DEFAULT_DATA);
+      normalizeState();
+      renderAll();
+    },
     renderAll: renderAll,
     colorFor: colorFor,
     esc: esc,

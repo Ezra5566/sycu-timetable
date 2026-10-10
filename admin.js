@@ -809,13 +809,14 @@
   function resetData() {
     if (!window.confirm("Restore the built-in timetable and discard all edits?")) return;
     var token = readToken();
-    window.SYCU_APP.storeClear();
-    window.SYCU_APP.reload();
+    // immediate, deterministic feedback: drop both caches and render the
+    // built-in data at once (a later sync re-aligns with the server if
+    // the reset request below then fails)
+    window.SYCU_APP.resetToBundled();
     if (mgr.open) closeManager(true);
     if (!token) { toast("Restored built-in timetable on this device"); return; }
     apiSend("POST", "reset", {}, token).then(function (r) {
       if (r.status === 200 && r.body && r.body.ok) {
-        window.SYCU_APP.syncRemote();
         toast("Published copy removed — everyone sees the built-in timetable");
       } else if (r.status === 401) {
         clearToken();
