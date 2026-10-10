@@ -555,11 +555,11 @@
         gh.className = "grp-head";
         if (!covered) {
           gh.colSpan = 1 + days.length;
-          gh.innerHTML = esc(label) + '<span class="grp-time">' + esc(range) + "</span>";
+          gh.innerHTML = label + '<span class="grp-time">' + esc(range) + "</span>";
           row.appendChild(gh);
         } else {
           // a double lesson crosses this row — keep its column clear
-          gh.innerHTML = esc(label);
+          gh.innerHTML = label;
           row.appendChild(gh);
           days.forEach(function (d) {
             if (coveredAt(d, pi)) return;
