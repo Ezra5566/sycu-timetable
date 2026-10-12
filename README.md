@@ -49,8 +49,9 @@ vercel dev
     faint dashed dividers (labelled *Break*), and the larger gaps show
     their length (*Lunch* between the halves of the day). Double lessons
     render as **one card spanning the full block** — never as two
-    separate entries. Days with no classes are omitted; empty slots stay
-    blank.
+    separate entries — and a *Whole period* class (`5-8`) spans the whole
+    afternoon 13:30–17:00 with the break rows still visible around it.
+    Days with no classes are omitted; empty slots stay blank.
   - **List** — classes grouped by day, ordered by session; a double lesson
     appears as a single `5-6` entry with its combined time range.
 - **Live updates** — the published timetable is re-fetched when the tab gains
@@ -77,7 +78,10 @@ periods separated by a 10-minute break:
 
 A course takes either a single lesson (one 45-minute period) or a double
 lesson — both periods of one block, ~100 minutes including the internal
-break (sessions `5` + `6`, or the combined code `"5-6"`).
+break (sessions `5` + `6`, or the combined code `"5-6"`). A lesson that
+occupies the **whole afternoon** (13:30–17:00, sessions `5`–`8`, combined
+code `"5-8"`) is booked as one *Whole period* class: the break rows stay
+visible, but the class renders as a single continuous block over them.
 
 ## For the administrator
 
@@ -116,11 +120,16 @@ Editing notes:
   entered as two rows (`5` + `6`) is **not** a clash.
 - The time-slot format decides the session rows: `standard8` = 8 single
   sessions (e.g. `5`; double lessons `1-2` … `7-8` are selectable too),
-  `block4` = 4 double blocks (e.g. `"5-6"`).
+  `block4` = 4 double blocks (e.g. `"5-6"`). Both formats also offer a
+  **Whole period** option (`5-8` · 13:30–17:00) for a class that runs the
+  entire afternoon across the breaks.
 - **Double lessons** in `standard8` can be entered either way: pick
   *Double lesson 5-6* from the session list, or list the same course twice
   (session `5` and session `6`) — both render as one continuous block
   covering the full 13:30–15:10 range.
+- **Whole period** classes (session `5-8`) render as one block covering
+  13:30–17:00 — the break rows remain visible in the row headers and in
+  the other days' columns.
 
 ## How data flows
 
@@ -172,6 +181,7 @@ offline). Keep the same shape:
   `session` matches a slot's `session` value (`5` for standard8, `"5-6"` for
   block4). In `standard8`, the same course on both sessions of a block
   (e.g. `5` and `6` on the same day) is treated as one double lesson.
+  `"5-8"` (both formats) is a whole-afternoon class, 13:30–17:00.
 - `locations` — room metadata (`building`, `room`, `campus`).
 
 An exported `timetable.js` is already in the right shape — edit it, or import
