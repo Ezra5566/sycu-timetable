@@ -13,7 +13,7 @@ sycuv2_timetable/
 ├── app.js              # data store + remote sync, rendering, search, live status
 ├── admin.js            # admin sign-in, timetable manager, publishing
 ├── api/                # Vercel serverless functions (the live-publishing backend)
-│   ├── _lib.js         #   auth tokens, Blob storage (fs fallback for local dev)
+│   ├── _lib.js         #   auth tokens, Upstash Redis storage (fs fallback for local dev)
 │   ├── login.js        #   POST /api/login    → signed 8h token
 │   ├── timetable.js    #   GET/PUT /api/timetable → read / publish
 │   └── reset.js        #   POST /api/reset    → unpublish
@@ -135,7 +135,7 @@ Editing notes:
 ## How data flows
 
 ```
-teacher edits ──PUT /api/timetable──▶ Vercel Blob (published copy)
+teacher edits ──PUT /api/timetable──▶ Upstash Redis (published copy)
                                           │
 students  ◀──GET /api/timetable───────────┘   (+ per-browser cache for offline)
 ```
@@ -149,9 +149,12 @@ Vercel version stays live.
 
 ```
 vercel link                     # once — links this folder to the project
-vercel blob create-store sycu-timetable-data
-# copy the Read_Write token from the output, then:
-vercel env add BLOB_READ_WRITE_TOKEN production   # paste token
+# storage = a Redis database, either added from the Vercel Marketplace (Upstash
+# for Redis / Vercel KV — it injects KV_REST_API_URL, KV_REST_API_TOKEN and
+# KV_REST_API_READ_ONLY_TOKEN automatically) or created at console.upstash.com
+# (region sin1) and pasted in:
+vercel env add UPSTASH_REDIS_REST_URL production    # only for a direct Upstash db
+vercel env add UPSTASH_REDIS_REST_TOKEN production  # only for a direct Upstash db
 vercel env add ADMIN_EMAIL production             # sycu@admin.com
 vercel env add ADMIN_PASSWORD production          # sycu#timetableweb
 vercel env add ADMIN_SECRET production            # openssl rand -hex 32
@@ -162,12 +165,14 @@ Environment variables (server-side only, never sent to the browser):
 
 | Var | Purpose |
 | --- | --- |
-| `BLOB_READ_WRITE_TOKEN` | Storage for the published timetable |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Redis REST storage for the published timetable (key `timetable:data`) — alternatively the marketplace integration's `KV_REST_API_URL` / `KV_REST_API_TOKEN` are picked up automatically |
+| `KV_REST_API_READ_ONLY_TOKEN` | Optional: used for reads, so the per-minute poll never carries a write token |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Checked by `/api/login` |
 | `ADMIN_SECRET` | Signs the 8-hour admin tokens (HMAC-SHA256) |
 
 Redeploying the static files does **not** touch the published timetable — it
-lives in Blob storage, so `vercel deploy` is safe at any time. **Reset** in
+lives in Redis under `timetable:data`, so `vercel deploy` is safe at any time.
+**Reset** in
 the admin bar clears the published copy and returns everyone to the bundled
 data.
 

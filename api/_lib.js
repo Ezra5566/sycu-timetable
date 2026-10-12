@@ -3,9 +3,12 @@
    SYCU Timetable API — shared helpers (not deployed as a route;
    files prefixed with "_" are helper modules only).
 
-   Storage: Vercel Blob over its REST API (zero dependencies).
-   When BLOB_READ_WRITE_TOKEN is not configured (local development)
-   blobs fall back to .data-local/*.json on disk.
+   Storage: Redis over its REST API (plain fetch — still zero dependencies,
+   no driver, no connection pool to leak between warm lambdas). Accepts
+   UPSTASH_REDIS_REST_URL/_TOKEN or the Vercel KV integration's
+   KV_REST_API_URL/KV_REST_API_TOKEN (read-only token used for GETs). When
+   neither is configured (local development) data falls back to
+   .data-local/*.json.
 
    Auth: POST /api/login verifies ADMIN_EMAIL / ADMIN_PASSWORD from
    env and returns a signed token (HMAC-SHA256 with ADMIN_SECRET)
@@ -16,12 +19,18 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-const BLOB_BASE = "https://blob.vercel-storage.com";
-const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || "";
-// NOTE: do not send x-api-version — the unversioned API accepts slash
-// pathnames on PUT/list/delete, while versioned (12) rejects them with
-// "Invalid pathname". All three calls verified with curl against a live store.
-const DATA_PATHNAME = "timetable/data.json";
+/* Storage credentials — two accepted spellings:
+   UPSTASH_REDIS_REST_URL / _TOKEN   (direct Upstash database)
+   KV_REST_API_URL / KV_REST_API_TOKEN (Vercel Marketplace KV integration)
+   KV_REST_API_READ_ONLY_TOKEN, when present, is used for reads so the
+   once-a-minute poll never carries a write-capable token. */
+const REDIS_URL = String(
+  process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || ""
+).replace(/\/+$/, "");
+const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || "";
+const REDIS_RO_TOKEN = process.env.KV_REST_API_READ_ONLY_TOKEN || REDIS_TOKEN;
+const DATA_KEY = "timetable:data";
+function redisOn() { return !!(REDIS_URL && REDIS_TOKEN); }
 
 /* ---------- responses ---------- */
 function json(res, status, obj) {
@@ -104,16 +113,12 @@ function clientIp(req) {
 }
 
 /* ---------- storage ---------- */
-function blobHeaders(extra) {
-  return Object.assign({ Authorization: "Bearer " + BLOB_TOKEN }, extra || {});
-}
-
-/* Transient Blob failures (429 / 5xx / network) are retried with a short
-   backoff — every storage operation below is idempotent (list, read,
-   full-payload PUT, delete), so retrying cannot corrupt anything. */
+/* Transient storage failures (429 / 5xx / network) are retried with a short
+   backoff — every operation below is idempotent (GET, SET, DEL), so
+   retrying cannot corrupt anything. */
 const RETRY_DELAYS = [300, 900];
-function blobError(kind, status) {
-  const e = new Error("blob " + kind + " " + status);
+function storageError(kind, status) {
+  const e = new Error("storage " + kind + (status != null ? " " + status : ""));
   if (status != null) e.status = status;
   return e;
 }
@@ -130,83 +135,50 @@ async function withRetry(fn) {
     }
   }
 }
-function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-async function listBlobs() {
-  return withRetry(async function () {
-    const list = await fetch(BLOB_BASE + "/?pathname=" + encodeURIComponent(DATA_PATHNAME), {
-      headers: blobHeaders()
-    });
-    if (!list.ok) throw blobError("list", list.status);
-    const body = await list.json();
-    return (body && body.blobs) || [];
-  });
+/* content hash for conditional (If-None-Match / 304) GETs */
+function etagFor(data) {
+  return '"' + crypto.createHash("sha1").update(JSON.stringify(data)).digest("base64").replace(/=+$/, "") + '"';
 }
-/* An empty list is confirmed by a second read after a short pause — the
-   list endpoint has been observed to return a transient empty result
-   while the blob exists (which would otherwise make Reset report success
-   without deleting anything). */
-async function listBlobsConfirmed() {
-  let blobs = await listBlobs();
-  if (blobs.length) return blobs;
-  await delay(300);
-  return listBlobs();
+
+/* ---------- Redis over REST ----------
+   POST {rest url} with the command as a JSON array; the reply is
+   {"result": ...}. One HTTP round trip per storage call. `ro` picks the
+   read-only token for GETs. */
+async function redisCmd(cmd, ro) {
+  return withRetry(async function () {
+    const r = await fetch(REDIS_URL, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + (ro ? REDIS_RO_TOKEN : REDIS_TOKEN),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(cmd)
+    });
+    if (!r.ok) throw storageError("redis", r.status);
+    const body = await r.json();
+    if (body && body.error) throw storageError(String(body.error), 400);
+    return body ? body.result : null;
+  });
 }
 
 async function storeGet() {
-  if (!BLOB_TOKEN) return localGet();
-  const blobs = await listBlobsConfirmed();
-  if (!blobs.length) return null;
-  return withRetry(async function () {
-    const file = await fetch(blobs[0].url);
-    if (!file.ok) throw blobError("read", file.status);
-    return await file.json();
-  });
+  if (!redisOn()) return localGet();
+  const raw = await redisCmd(["GET", DATA_KEY], true);
+  if (raw == null || raw === "") return null; // nothing published yet
+  try { return JSON.parse(raw); }
+  catch (e) { throw storageError("corrupt payload", 500); }
 }
 
 async function storePut(data) {
-  if (!BLOB_TOKEN) return localPut(data);
-  return withRetry(async function () {
-    const r = await fetch(BLOB_BASE + "/" + DATA_PATHNAME, {
-      method: "PUT",
-      headers: blobHeaders({
-        "content-type": "application/json",
-        "x-add-random-suffix": "0",
-        "x-cache-control-max-age": "0"
-      }),
-      body: JSON.stringify(data)
-    });
-    if (!r.ok) throw blobError("write", r.status);
-    return true;
-  });
+  if (!redisOn()) return localPut(data);
+  await redisCmd(["SET", DATA_KEY, JSON.stringify(data)]);
+  return true;
 }
 
 async function storeClear() {
-  if (!BLOB_TOKEN) return localClear();
-  let emptyStreak = 0;
-  for (let i = 0; i < 5; i++) {
-    const blobs = await listBlobs();
-    if (!blobs.length) {
-      // require two empty reads in a row before declaring success
-      emptyStreak++;
-      if (emptyStreak >= 2) return true;
-      await delay(300);
-      continue;
-    }
-    emptyStreak = 0;
-    // deletion is POST /delete with the blob URLs (not HTTP DELETE)
-    await withRetry(async function () {
-      const r = await fetch(BLOB_BASE + "/delete", {
-        method: "POST",
-        headers: blobHeaders({ "content-type": "application/json" }),
-        body: JSON.stringify({ urls: blobs.map(function (b) { return b.url; }) })
-      });
-      if (!r.ok) throw blobError("delete", r.status);
-    });
-  }
-  // verify: if anything is left after the loop, fail loudly
-  const rest = await listBlobs();
-  if (rest.length) throw blobError("delete-verify", 500);
+  if (!redisOn()) return localClear();
+  await redisCmd(["DEL", DATA_KEY]);
   return true;
 }
 
@@ -235,5 +207,6 @@ function validShape(data) {
 
 module.exports = {
   json, bodyOf, configured, credsValid, issueToken, requireAuth,
-  lockRemainingMs, recordFail, storeGet, storePut, storeClear, validShape
+  lockRemainingMs, recordFail, storeGet, storePut, storeClear, validShape,
+  etagFor
 };

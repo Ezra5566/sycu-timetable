@@ -510,6 +510,7 @@ table.tgrid.has-blocks td.cell::after {
 .empty { padding: 54px 20px; text-align: center; color: var(--muted); font-size: 14px; }
 .empty .big { font-size: 34px; margin-bottom: 10px; opacity: 0.55; }
 .livestat { padding: 14px 4px 0; text-align: left; font-size: 12px; }
+.sync-warn { color: var(--live); font-weight: 650; }
 .livestat b { font-weight: 650; }
 
 /* ---------- footer ---------- */

@@ -15,6 +15,7 @@
   var DEFAULT_DATA = window.SYCU_DATA;
   var DATA_KEY = "sycu.data.v1";
   var REMOTE_KEY = "sycu.data.remote";
+  var REMOTE_TAG_KEY = "sycu.data.remoteTag"; // ETag of the published copy
   var API_BASE = "api/";
 
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -40,35 +41,73 @@
      API is absent (file://, offline, plain static hosting). A failed
      fetch is retried with backoff (2s → 30s) so a fresh visitor sees a
      recent publish promptly even if the very first request hiccups. */
-  var syncFailures = 0, syncRetryTimer = null;
+  var syncFailures = 0, syncRetryTimer = null, liveOk = true;
+  function setLiveOk(v) {
+    if (liveOk === v) return;
+    liveOk = v;
+    renderFooter();
+  }
+  function tagGet() { try { return localStorage.getItem(REMOTE_TAG_KEY) || ""; } catch (e) { return ""; } }
+  function tagSet(t) {
+    try { t ? localStorage.setItem(REMOTE_TAG_KEY, t) : localStorage.removeItem(REMOTE_TAG_KEY); }
+    catch (e) { /* quota / private mode */ }
+  }
+  /* metadata.updated is stamped "YYYY-MM-DD HH:mm" by admin.js, so plain
+     string comparison is chronological (see stamp() in admin.js) */
+  function stampOf(d) { return (d && d.metadata && d.metadata.updated) || ""; }
   function scheduleSyncRetry() {
-    if (syncRetryTimer) return;
+    // capped backoff: the 60 s / focus / visibility polls already keep
+    // retrying, so hammering further only wastes requests (and, when the
+    // storage backend is unhappy, quota)
+    if (syncRetryTimer || syncFailures >= 4) return;
     var delay = Math.min(2000 * Math.pow(2, Math.min(syncFailures, 4)), 30000);
     syncFailures++;
     syncRetryTimer = setTimeout(function () { syncRetryTimer = null; syncRemote(); }, delay);
   }
   function syncRemote() {
     if (typeof fetch !== "function" || location.protocol === "file:") return Promise.resolve(false);
-    return fetch(API_BASE + "timetable", { cache: "no-store" })
-      .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
-      .then(function (res) {
-        if (!res || !res.ok) return false;
-        syncFailures = 0;
-        if (!res.data) {
-          // nothing published (e.g. admin reset) — revert to device/shipped data
-          cacheDrop(REMOTE_KEY);
-          var next = readCache(DATA_KEY) || deepClone(DEFAULT_DATA);
-          if (JSON.stringify(DATA) !== JSON.stringify(next)) { DATA = next; normalizeState(); renderAll(); }
+    // conditional GET — only send the tag when a published copy is actually
+    // cached, so an "empty" 304 can never hide a server-side reset
+    var tag = readCache(REMOTE_KEY) ? tagGet() : "";
+    var opts = { cache: "no-store" };
+    if (tag) opts.headers = { "If-None-Match": tag };
+    return fetch(API_BASE + "timetable", opts)
+      .then(function (r) {
+        if (r.status === 304) { syncFailures = 0; setLiveOk(true); return true; }
+        if (!r.ok) throw new Error("http " + r.status);
+        var newTag = "";
+        try { newTag = r.headers.get("ETag") || ""; } catch (e) { /* older browsers */ }
+        return r.json().then(function (res) {
+          if (!res || !res.ok) return false;
+          syncFailures = 0;
+          setLiveOk(true);
+          if (!res.data) {
+            // nothing published (e.g. admin reset) — revert to device/shipped data
+            cacheDrop(REMOTE_KEY);
+            tagSet("");
+            var next = readCache(DATA_KEY) || deepClone(DEFAULT_DATA);
+            if (JSON.stringify(DATA) !== JSON.stringify(next)) { DATA = next; normalizeState(); renderAll(); }
+            return true;
+          }
+          // Retire stale device-only edits: a published copy that is provably
+          // newer wins, so a browser whose publish once failed can never stay
+          // forked forever. Unpublished work is never discarded — only when
+          // both sides carry a comparable timestamp and the server is newer.
+          var localEdits = readCache(DATA_KEY);
+          if (localEdits) {
+            var srvStamp = stampOf(res.data), locStamp = stampOf(localEdits);
+            if (srvStamp && locStamp && srvStamp > locStamp) cacheDrop(DATA_KEY);
+          }
+          cacheSet(REMOTE_KEY, res.data);
+          if (newTag) tagSet(newTag);
+          if (JSON.stringify(DATA) === JSON.stringify(res.data)) return true;
+          DATA = res.data;
+          normalizeState();
+          renderAll();
           return true;
-        }
-        cacheSet(REMOTE_KEY, res.data);
-        if (JSON.stringify(DATA) === JSON.stringify(res.data)) return true;
-        DATA = res.data;
-        normalizeState();
-        renderAll();
-        return true;
+        });
       })
-      .catch(function () { scheduleSyncRetry(); return false; });
+      .catch(function () { setLiveOk(false); scheduleSyncRetry(); return false; });
   }
   function storeSave(d) {
     try { localStorage.setItem(DATA_KEY, JSON.stringify(d)); return true; }
@@ -769,7 +808,9 @@
     });
     var updated = m.updated ? " · updated " + esc(m.updated) : "";
     $("foot-left").innerHTML = esc(m.source || "Timetable") + " · generated " + esc(m.generated || "—") + updated + " · " + esc(m.timezone || "");
-    $("foot-right").innerHTML = DATA.semesters.length + " semesters · " + progs + " programs · " + entries + " classes" + (isCustomized() ? " · local edits" : "");
+    $("foot-right").innerHTML = DATA.semesters.length + " semesters · " + progs + " programs · " + entries + " classes" +
+      (isCustomized() ? " · local edits" : "") +
+      (liveOk ? "" : ' <span class="sync-warn">· live updates unavailable</span>');
   }
 
   /* ---- clock --------------------------------------------- */
