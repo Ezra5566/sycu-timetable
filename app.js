@@ -301,8 +301,15 @@
       if (ahead >= 0) { next = ev; break; }
     }
 
+    /* In progress now: started earlier today, not yet finished. A class in
+       progress is by definition no longer "ahead of now", so it needs its
+       own pass — keying it off `next` meant the live badge only ever fired
+       at the exact minute a class started. */
     var live = null;
-    if (next && next.di === nowIdx && nowMin >= next.start && nowMin < next.end) live = next;
+    for (var j = 0; j < events.length; j++) {
+      var lv = events[j];
+      if (lv.di === nowIdx && nowMin >= lv.start && nowMin < lv.end) { live = lv; break; }
+    }
 
     var idOf = function (ev) { return ev ? ev.e.day + "|" + ev.e.session + "|" + ev.e.course : null; };
     return { nowMin: nowMin, nowIdx: nowIdx, live: idOf(live), next: idOf(next) };
@@ -317,6 +324,15 @@
   };
   var currentSem = DATA.semesters[0];
   var STATUS = {};
+
+  /* Signature of everything that visually changes the view. tick() uses it
+     to skip the DOM rebuild when nothing moved (the clock/status line is
+     refreshed in place), so the grid no longer re-renders every 30s. */
+  var VIEW_KEY = null;
+  function viewKey(p) {
+    var st = STATUS[p.id] || {};
+    return [state.prog, state.sem, state.view, p.id, st.live, st.next, st.nowIdx].join("\u0001");
+  }
 
   function curSem() {
     for (var i = 0; i < DATA.semesters.length; i++)
@@ -334,9 +350,10 @@
   function renderSemesters() {
     var bar = $("semesters");
     bar.textContent = "";
-    DATA.semesters.forEach(function (s) {
+    DATA.semesters.forEach(function (s, si) {
       var b = el("button", "seg" + (s.id === state.sem ? " on" : ""));
       b.type = "button";
+      b.style.setProperty("--i", String(si));
       b.innerHTML = esc(s.name) + '<span class="count">' + (s.programs || []).length + "</span>";
       b.onclick = function () {
         state.sem = s.id;
@@ -355,9 +372,10 @@
   }
 
   /* ---- sidebar programs ---------------------------------- */
-  function renderPrograms() {
+  function renderPrograms(animate) {
     var box = $("progs");
     box.textContent = "";
+    box.classList.toggle("stagger", animate !== false);
     var list = curProgs();
     var q = state.q.trim().toLowerCase();
 
@@ -375,9 +393,10 @@
       return;
     }
 
-    filtered.forEach(function (p) {
+    filtered.forEach(function (p, fi) {
       var b = el("button", "program" + (p.id === state.prog ? " on" : ""));
       b.type = "button";
+      b.style.setProperty("--i", String(fi));
       var c = colorFor((p.schedule && p.schedule[0] && p.schedule[0].course) || p.name);
       var kindLabel = curSem().timeSlotFormat === "block4" ? "4 blocks" : "8 sessions";
       b.innerHTML =
@@ -386,7 +405,7 @@
         '<div class="p-cn">' + esc(p.nameCN || "") + "</div>" +
         '<div class="p-meta"><span class="pill">' + mergedSchedule(curSem(), p).length + " slots</span>" +
         '<span class="pill ghost">' + esc(kindLabel) + "</span></div>";
-      b.onclick = function () { state.prog = p.id; renderPrograms(); renderInfo(); renderView(); };
+      b.onclick = function () { state.prog = p.id; renderPrograms(false); renderInfo(); renderView(); };
       box.appendChild(b);
     });
   }
@@ -451,13 +470,16 @@
   function renderView() {
     var v = $("view");
     v.textContent = "";
+    v.classList.remove("quiet");
     var p = curProgs().filter(function (x) { return x.id === state.prog; })[0];
     if (!p) {
       v.appendChild(el("div", "panel empty", '<div class="big">' + ICON_CALENDAR + '</div>No program available for this semester.'));
+      VIEW_KEY = null;
       return;
     }
     if (state.view === "list") renderList(v, p);
     else renderGrid(v, p);
+    VIEW_KEY = viewKey(p);
   }
 
   /* ---------- grid view ---------- */
@@ -535,7 +557,7 @@
         '<div class="c-meta"><span class="c-loc">' + esc(e.location) + "</span>" +
         '<span class="c-sess">' + esc("Session " + e.session) + "</span>" +
         '<span class="c-time">' + esc(timeText) + "</span>" +
-        (adminOn() ? '<button class="mini-edit" type="button" title="Edit program" data-edit-prog="' + esc(p.id) + '">✎</button>' : "") +
+        (adminOn() ? '<button class="mini-edit" type="button" title="Edit program" data-edit-prog="' + esc(p.id) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5h4L20 8a2.1 2.1 0 0 0-3-3L5.5 16.5v3Z"/><path d="m15.5 6.5 3 3"/></svg></button>' : "") +
         "</div>";
       return cls;
     };
@@ -637,12 +659,8 @@
     v.appendChild(scroll);
 
     // live line under grid
-    var line = el("div", "empty");
-    line.style.padding = "14px 4px 0";
-    line.style.textAlign = "left";
-    line.style.fontSize = "12px";
-    var msg = liveMessage(p, st);
-    line.innerHTML = msg;
+    var line = el("div", "empty livestat");
+    line.innerHTML = liveMessage(p, st);
     v.appendChild(line);
   }
 
@@ -680,7 +698,7 @@
           '<div class="e-when">' + esc(e.session) + '<span class="s">' + esc(timeText) + "</span></div>" +
           '<div class="e-name">' + esc(e.course) + tag + "</div>" +
           '<div class="e-right"><span class="e-room">' + esc(e.location) + "</span>" +
-          (adminOn() ? '<button class="mini-edit" type="button" title="Edit program" data-edit-prog="' + esc(p.id) + '">✎</button>' : "") +
+          (adminOn() ? '<button class="mini-edit" type="button" title="Edit program" data-edit-prog="' + esc(p.id) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5h4L20 8a2.1 2.1 0 0 0-3-3L5.5 16.5v3Z"/><path d="m15.5 6.5 3 3"/></svg></button>' : "") +
           "</div>";
         en.appendChild(item);
       });
@@ -689,10 +707,7 @@
     });
 
     v.appendChild(wrap);
-    var line = el("div", "empty");
-    line.style.padding = "14px 4px 0";
-    line.style.textAlign = "left";
-    line.style.fontSize = "12px";
+    var line = el("div", "empty livestat");
     line.innerHTML = liveMessage(p, st);
     v.appendChild(line);
   }
@@ -764,16 +779,28 @@
     // refresh live badges every 30s
     refreshStatus();
     var p = curProgs().filter(function (x) { return x.id === state.prog; })[0];
-    if (p) {
-      var v = $("view");
-      v.innerHTML = "";
-      state.view === "list" ? renderList(v, p) : renderGrid(v, p);
-    }
+    if (!p) return;
+    // keep the status line fresh in place (it embeds the current time)
+    var line = document.querySelector("#view .livestat");
+    if (line) line.innerHTML = liveMessage(p, STATUS[p.id]);
+    // rebuild only when the live/next badge or today actually changed
+    if (viewKey(p) === VIEW_KEY) return;
+    var v = $("view");
+    v.classList.add("quiet");
+    v.innerHTML = "";
+    state.view === "list" ? renderList(v, p) : renderGrid(v, p);
+    VIEW_KEY = viewKey(p);
   }
 
   /* ---- theme --------------------------------------------- */
+  var themeTimer = null;
   function applyTheme(t) {
-    document.documentElement.dataset.theme = t;
+    var root = document.documentElement;
+    root.dataset.theme = t;
+    // cross-fade surfaces while the palette swaps, then step aside
+    root.classList.add("theming");
+    clearTimeout(themeTimer);
+    themeTimer = setTimeout(function () { root.classList.remove("theming"); }, 360);
     localStorage.setItem("sycu.theme", t);
     var meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.content = t === "light" ? "#f3f5f9" : "#080b12";
@@ -789,7 +816,7 @@
   qEl.oninput = function () {
     clearTimeout(qTimer);
     var val = qEl.value;
-    qTimer = setTimeout(function () { state.q = val; renderPrograms(); }, 110);
+    qTimer = setTimeout(function () { state.q = val; renderPrograms(false); }, 110);
   };
   qEl.onkeydown = function (e) {
     if (e.key === "Enter") {
@@ -799,7 +826,7 @@
           return (ee.course + " " + ee.location).toLowerCase().indexOf(state.q.toLowerCase()) >= 0;
         });
       })[0]);
-      if (hit) { state.prog = hit.id; state.q = ""; qEl.value = ""; renderPrograms(); renderInfo(); renderView(); }
+      if (hit) { state.prog = hit.id; state.q = ""; qEl.value = ""; renderPrograms(false); renderInfo(); renderView(); }
     }
   };
 

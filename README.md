@@ -103,7 +103,7 @@ Once signed in you get an **admin bar**:
 | **Reset** | Unpublishes everything and restores the built-in data for everyone. |
 | **Sign out** | Ends the admin session on this device. |
 
-While signed in, every class card and list row shows a small **✎** that opens
+While signed in, every class card and list row shows a small pencil button that opens
 that program's schedule editor directly.
 
 Editing notes:

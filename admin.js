@@ -392,7 +392,7 @@
           return '<option value="' + esc(f) + '"' + (s.timeSlotFormat === f ? " selected" : "") + ">" + esc(f) + "</option>";
         }).join("") + "</select>" +
         '<span class="pill">' + (s.programs || []).length + " programs</span>" +
-        '<button class="btn-icon danger" type="button" data-act="sem-del" data-i="' + i + '" title="Delete semester">✕</button>';
+        '<button class="btn-icon danger" type="button" data-act="sem-del" data-i="' + i + '" title="Delete semester"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>';
       body.appendChild(row);
     });
     body.appendChild(addBtn("sem-add", "+ Add semester"));
@@ -433,7 +433,7 @@
         '<div class="mgr-sub">' + esc(p.nameCN || "—") + "</div>" +
         '<span class="pill">' + (p.schedule || []).length + " classes</span>" +
         '<button class="btn btn-sm" type="button" data-act="prog-open" data-i="' + i + '">Edit schedule</button>' +
-        '<button class="btn-icon danger" type="button" data-act="prog-del" data-i="' + i + '" title="Delete program">✕</button>';
+        '<button class="btn-icon danger" type="button" data-act="prog-del" data-i="' + i + '" title="Delete program"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>';
       body.appendChild(row);
     });
     body.appendChild(addBtn("prog-add", "+ Add program"));
@@ -476,7 +476,7 @@
         '<select data-field="ent-session" data-i="' + i + '">' + sessionOptHtml(opts, e.session) + "</select>" +
         '<input data-field="ent-course" data-i="' + i + '" value="' + esc(e.course || "") + '" placeholder="Course name" />' +
         '<input data-field="ent-loc" data-i="' + i + '" value="' + esc(e.location || "") + '" placeholder="Room" list="roomlist" />' +
-        '<button class="btn-icon danger" type="button" data-act="ent-del" data-i="' + i + '" title="Remove class">✕</button>';
+        '<button class="btn-icon danger" type="button" data-act="ent-del" data-i="' + i + '" title="Remove class"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>';
       list.appendChild(row);
     });
     body.appendChild(list);
@@ -506,7 +506,7 @@
         '<input data-field="room-building" data-i="' + i + '" value="' + esc(L.building || "") + '" placeholder="Building" />' +
         '<input data-field="room-room" data-i="' + i + '" value="' + esc(L.room || "") + '" placeholder="Room" />' +
         '<input data-field="room-campus" data-i="' + i + '" value="' + esc(L.campus || "") + '" placeholder="Campus" />' +
-        '<button class="btn-icon danger" type="button" data-act="room-del" data-i="' + i + '" title="Delete room">✕</button>';
+        '<button class="btn-icon danger" type="button" data-act="room-del" data-i="' + i + '" title="Delete room"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>';
       body.appendChild(row);
     });
     body.appendChild(addBtn("room-add", "+ Add room"));
