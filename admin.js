@@ -270,9 +270,10 @@
   }
   /* Selectable sessions for a semester: every slot of its format, plus
      paired double lessons (1-2, 3-4, 5-6, 7-8) for single-session formats
-     so the teacher can mark a two-period lesson directly, plus a whole-
-     period option covering every afternoon session (5-8 · 13:30-17:00) —
-     breaks still show, the class spans over them. */
+     so the teacher can mark a two-period lesson directly, plus whole-
+     period options covering a full half-day (morning 1-4 · 8:20-12:00,
+     afternoon 5-8 · 13:30-17:00) — breaks still show, the class spans
+     over them. */
   function sessionOptions(d, sem) {
     var fmt = d.timeSlotFormats[sem.timeSlotFormat];
     var slots = (fmt && fmt.slots) || [];
@@ -287,18 +288,24 @@
         opts.push({ value: String(a.session) + "-" + String(b.session), time: start + "-" + end, dbl: true });
       }
     }
-    /* whole afternoon as one lesson: first→last afternoon session (5-8) */
-    var aft = slots.filter(function (sl) { return sl.period === "afternoon"; });
-    if (aft.length > 1) {
-      var from = (String(aft[0].session).match(/^\d+/) || [])[0];
-      var to = (String(aft[aft.length - 1].session).match(/\d+$/) || [])[0];
-      var wStart = String(aft[0].time).split("-")[0];
-      var wEnd = String(aft[aft.length - 1].time).split("-").pop();
+    /* whole half-day periods as one lesson: first→last session of each
+       period (morning 1-4 · 8:20-12:00, afternoon 5-8 · 13:30-17:00) */
+    var periods = [];
+    slots.forEach(function (sl) {
+      if (periods.indexOf(sl.period) < 0) periods.push(sl.period);
+    });
+    periods.forEach(function (per) {
+      var group = slots.filter(function (sl) { return sl.period === per; });
+      if (group.length <= 1) return;
+      var from = (String(group[0].session).match(/^\d+/) || [])[0];
+      var to = (String(group[group.length - 1].session).match(/\d+$/) || [])[0];
+      var wStart = String(group[0].time).split("-")[0];
+      var wEnd = String(group[group.length - 1].time).split("-").pop();
       var wVal = from + "-" + to;
       if (from && to && from !== to && !opts.some(function (o) { return o.value === wVal; })) {
         opts.push({ value: wVal, time: wStart + "-" + wEnd, dbl: true, whole: true });
       }
-    }
+    });
     return opts;
   }
   /* <option> markup for a schedule row's session select, with the current
@@ -372,9 +379,9 @@
   function renderSemestersTab(body) {
     body.appendChild(el("p", "mgr-hint",
       "Semesters appear as tabs on the site. The time slot format sets the session rows — " +
-      "<b>standard8</b> = 8 single sessions (double lessons 1-2 … 7-8 and the whole " +
-      "afternoon 5-8 selectable per class), <b>block4</b> = 4 double blocks " +
-      "(whole afternoon 5-8 selectable too)."));
+      "<b>standard8</b> = 8 single sessions (double lessons 1-2 … 7-8 and whole-period " +
+      "1-4 / 5-8 selectable per class), <b>block4</b> = 4 double blocks " +
+      "(whole-period 1-4 / 5-8 selectable too)."));
     var formats = Object.keys(mgr.draft.timeSlotFormats || {});
     mgr.draft.semesters.forEach(function (s, i) {
       var row = el("div", "mgr-row row-sem");
@@ -474,7 +481,7 @@
     });
     body.appendChild(list);
     body.appendChild(addBtn("ent-add", "+ Add class"));
-    body.appendChild(el("p", "mgr-hint", "Amber rows clash with another class of this program in an overlapping session — double lessons count as both of their sessions. The same course listed in both sessions of a block (e.g. 5 and 6), or a <b>Double lesson</b> from the session list, renders as one continuous block. <b>Whole period</b> (5-8) books the whole afternoon 13:30-17:00 — the breaks still show, the class spans over them. Unknown room codes are added automatically on save."));
+    body.appendChild(el("p", "mgr-hint", "Amber rows clash with another class of this program in an overlapping session — double lessons count as both of their sessions. The same course listed in both sessions of a block (e.g. 5 and 6), or a <b>Double lesson</b> from the session list, renders as one continuous block. <b>Whole period</b> classes book a full half-day — <b>1-4</b> (8:20-12:00) or <b>5-8</b> (13:30-17:00) — the breaks still show, the class spans over them. Unknown room codes are added automatically on save."));
   }
 
   function conflictOf(prog, idx) {
